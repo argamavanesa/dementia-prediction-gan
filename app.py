@@ -64,10 +64,11 @@ HF_REPO_ID = "Arga23/dementia-cgan-mri"
 
 # ==================== LABEL SAFETY ====================
 LABEL_MAPPING = {
-    0: "Non-Dementia (Sehat)",
-    1: "Very Mild Dementia (Sangat Ringan)",
-    2: "Mild Dementia (Ringan)",
-    3: "Moderate Dementia (Sedang)"
+    # Mapping disesuaikan dengan urutan sebenarnya di model: 0 paling berat → 3 paling ringan
+    0: "Moderate Dementia (Sedang)",
+    1: "Mild Dementia (Ringan)",
+    2: "Very Mild Dementia (Sangat Ringan)",
+    3: "Non-Dementia (Sehat)"
 }
 
 def safe_stage_name(stage_id):
@@ -79,10 +80,10 @@ def safe_stage_name(stage_id):
 STAGE_NAMES = LABEL_MAPPING
 
 STAGE_DESCRIPTIONS = {
-    0: "Tidak ada tanda-tanda demensia, fungsi kognitif normal",
-    1: "Gejala ringan, sedikit masalah memori",
-    2: "Kesulitan mengingat dan mengorganisir pikiran",
-    3: "Kesulitan signifikan dalam aktivitas sehari-hari"
+    0: "Kesulitan signifikan dalam aktivitas sehari-hari (paling berat)",
+    1: "Kesulitan mengingat dan mengorganisir pikiran",
+    2: "Gejala ringan, sedikit masalah memori",
+    3: "Tidak ada tanda-tanda demensia, fungsi kognitif normal"
 }
 
 REFERENCE_IMAGE_PATH = Path(__file__).resolve().parent / "real-dementia-mri.png"
@@ -231,10 +232,10 @@ def rough_severity_score(img_pil):
 
 def check_progression_consistency(scores):
     """
-    Stage lebih tinggi seharusnya severity score lebih kecil
+    Dengan mapping baru: stage lebih tinggi → semakin ringan → score (brightness) harus meningkat
     """
     for i in range(len(scores) - 1):
-        if scores[i + 1][1] > scores[i][1]:
+        if scores[i + 1][1] < scores[i][1]:
             return False
     return True
 
@@ -251,11 +252,12 @@ def load_reference_severity():
 def adjust_progression_labels(scores, start_stage, end_stage, reference_score=None, tolerance=0.02):
     """
     Re-map displayed stage labels based on severity ordering.
-    Brighter images (lebih ringan) mendapat label stage yang lebih rendah.
-    Jika reference_score tersedia, turunkan label jika score jauh lebih terang dari referensi.
+    Dengan mapping baru: stage kecil = lebih berat (lebih gelap), stage besar = lebih ringan (lebih terang).
+    Jika reference_score tersedia dan gambar jauh lebih terang, naikkan stage (lebih ringan).
     """
     desired_labels = list(range(start_stage, end_stage + 1))
-    sorted_by_brightness = sorted(enumerate(scores), key=lambda x: -x[1][1])
+    # Urutkan dari paling gelap ke paling terang
+    sorted_by_brightness = sorted(enumerate(scores), key=lambda x: x[1][1])
     adjusted = [None] * len(scores)
 
     for (original_idx, (_, score)), desired_stage in zip(sorted_by_brightness, desired_labels):
@@ -265,8 +267,8 @@ def adjust_progression_labels(scores, start_stage, end_stage, reference_score=No
         for idx, (_, score_val) in enumerate(scores):
             if adjusted[idx] is None:
                 continue
-            if adjusted[idx] > start_stage and score_val > reference_score + tolerance:
-                adjusted[idx] = max(start_stage, adjusted[idx] - 1)
+            if adjusted[idx] < end_stage and score_val > reference_score + tolerance:
+                adjusted[idx] = min(end_stage, adjusted[idx] + 1)
 
     return adjusted
 
