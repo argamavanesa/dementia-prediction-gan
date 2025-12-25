@@ -1,0 +1,47 @@
+# Notebook (exclude training notebook)
+gan-model.ipynb
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# HuggingFace cache
+hf_cache/
+.huggingface/
+
+# Model weights & checkpoints
+*.pth
+checkpoints/
+model_output/
+hf_export/
+
+# Generated outputs
+output/
+generated_*.png
+*.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Other
+.env
+.cache/
+*.log
