@@ -65,10 +65,10 @@ HF_REPO_ID = "Arga23/dementia-cgan-mri"
 # ==================== LABEL SAFETY ====================
 LABEL_MAPPING = {
     # Mapping disesuaikan dengan urutan sebenarnya di model: 0 paling berat → 3 paling ringan
-    0: "Moderate Dementia (Sedang)",
-    1: "Mild Dementia (Ringan)",
-    2: "Very Mild Dementia (Sangat Ringan)",
-    3: "Non-Dementia (Sehat)"
+    0: "Non-Dementia (Sehat)"",
+    1: "Very Mild Dementia (Sangat Ringan)",
+    2: "Mild Dementia (Ringan)",
+    3: "Moderate Dementia (Sedang)"
 }
 
 def safe_stage_name(stage_id):
@@ -80,10 +80,10 @@ def safe_stage_name(stage_id):
 STAGE_NAMES = LABEL_MAPPING
 
 STAGE_DESCRIPTIONS = {
-    0: "Kesulitan signifikan dalam aktivitas sehari-hari (paling berat)",
-    1: "Kesulitan mengingat dan mengorganisir pikiran",
-    2: "Gejala ringan, sedikit masalah memori",
-    3: "Tidak ada tanda-tanda demensia, fungsi kognitif normal"
+    0: "Tidak ada tanda-tanda demensia, fungsi kognitif normal",
+    1: "Gejala ringan, sedikit masalah memori",
+    2: "Kesulitan mengingat dan mengorganisir pikiran ",
+    3: "Kesulitan signifikan dalam aktivitas sehari-hari (paling berat)"
 }
 
 REFERENCE_IMAGE_PATH = Path(__file__).resolve().parent / "real-dementia-mri.png"
@@ -614,3 +614,4 @@ def main():
 # ==================== RUN APP ====================
 if __name__ == "__main__":
     main()
+
