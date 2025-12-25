@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io
 from datetime import datetime
+from pathlib import Path
 
 # Import Generator architecture
 try:
@@ -61,13 +62,21 @@ st.markdown("""
 # Configuration
 HF_REPO_ID = "Arga23/dementia-cgan-mri"
 
-# Stage names
-STAGE_NAMES = {
+# ==================== LABEL SAFETY ====================
+LABEL_MAPPING = {
     0: "Non-Dementia (Sehat)",
     1: "Very Mild Dementia (Sangat Ringan)",
     2: "Mild Dementia (Ringan)",
     3: "Moderate Dementia (Sedang)"
 }
+
+def safe_stage_name(stage_id):
+    if stage_id not in LABEL_MAPPING:
+        return "Unknown Stage"
+    return LABEL_MAPPING[stage_id]
+
+# Alias for backward compatibility in non-output logic
+STAGE_NAMES = LABEL_MAPPING
 
 STAGE_DESCRIPTIONS = {
     0: "Tidak ada tanda-tanda demensia, fungsi kognitif normal",
@@ -75,6 +84,8 @@ STAGE_DESCRIPTIONS = {
     2: "Kesulitan mengingat dan mengorganisir pikiran",
     3: "Kesulitan signifikan dalam aktivitas sehari-hari"
 }
+
+REFERENCE_IMAGE_PATH = Path(__file__).resolve().parent / "real-dementia-mri.png"
 
 # ==================== INITIALIZE MODEL ====================
 @st.cache_resource
@@ -210,6 +221,55 @@ def create_image_grid(images, stage_name):
     plt.tight_layout()
     return fig
 
+def rough_severity_score(img_pil):
+    """
+    Heuristic kasar:
+    - stage tinggi → intensitas rata-rata lebih gelap (lebih banyak ruang kosong)
+    """
+    img = np.array(img_pil).astype(np.float32) / 255.0
+    return float(img.mean())
+
+def check_progression_consistency(scores):
+    """
+    Stage lebih tinggi seharusnya severity score lebih kecil
+    """
+    for i in range(len(scores) - 1):
+        if scores[i + 1][1] > scores[i][1]:
+            return False
+    return True
+
+def load_reference_severity():
+    """Load reference MRI severity score for light sanity check."""
+    if not REFERENCE_IMAGE_PATH.exists():
+        return None, "Reference image not found"
+    try:
+        ref_img = Image.open(REFERENCE_IMAGE_PATH).convert("L")
+        return rough_severity_score(ref_img), None
+    except Exception as exc:  # pragma: no cover - defensive
+        return None, str(exc)
+
+def adjust_progression_labels(scores, start_stage, end_stage, reference_score=None, tolerance=0.02):
+    """
+    Re-map displayed stage labels based on severity ordering.
+    Brighter images (lebih ringan) mendapat label stage yang lebih rendah.
+    Jika reference_score tersedia, turunkan label jika score jauh lebih terang dari referensi.
+    """
+    desired_labels = list(range(start_stage, end_stage + 1))
+    sorted_by_brightness = sorted(enumerate(scores), key=lambda x: -x[1][1])
+    adjusted = [None] * len(scores)
+
+    for (original_idx, (_, score)), desired_stage in zip(sorted_by_brightness, desired_labels):
+        adjusted[original_idx] = desired_stage
+
+    if reference_score is not None:
+        for idx, (_, score_val) in enumerate(scores):
+            if adjusted[idx] is None:
+                continue
+            if adjusted[idx] > start_stage and score_val > reference_score + tolerance:
+                adjusted[idx] = max(start_stage, adjusted[idx] - 1)
+
+    return adjusted
+
 # ==================== MAIN APP ====================
 def main():
     # Header
@@ -246,16 +306,21 @@ def main():
         checkpoint['img_size'],
         checkpoint['num_classes']
     ), unsafe_allow_html=True)
+
+    if 'reference_severity' not in st.session_state:
+        ref_score, ref_error = load_reference_severity()
+        st.session_state['reference_severity'] = ref_score
+        st.session_state['reference_severity_error'] = ref_error
     
     # Sidebar - Stage Information
     with st.sidebar:
         st.header("ℹ️ Dementia Stages")
         st.write("Model dapat menghasilkan gambar MRI untuk 4 tahap demensia:")
         
-        for stage_id, stage_name in STAGE_NAMES.items():
+        for stage_id in STAGE_NAMES.keys():
             st.markdown(f"""
             <div class="stage-card">
-            <b>Stage {stage_id}:</b> {stage_name}<br>
+            <b>Stage {stage_id}:</b> {safe_stage_name(stage_id)}<br>
             <small>{STAGE_DESCRIPTIONS[stage_id]}</small>
             </div>
             """, unsafe_allow_html=True)
@@ -280,7 +345,7 @@ def main():
         start_stage = st.selectbox(
             "Start Stage:",
             options=list(STAGE_NAMES.keys()),
-            format_func=lambda x: f"Stage {x}",
+            format_func=lambda x: f"Stage {x}: {safe_stage_name(x)}",
             key="start_stage"
         )
     
@@ -288,7 +353,7 @@ def main():
         end_stage = st.selectbox(
             "End Stage:",
             options=list(STAGE_NAMES.keys()),
-            format_func=lambda x: f"Stage {x}",
+            format_func=lambda x: f"Stage {x}: {safe_stage_name(x)}",
             index=3,
             key="end_stage"
         )
@@ -307,34 +372,99 @@ def main():
                             generator, checkpoint, device, stage, 1
                         )
                         progression_images.append((stage, imgs[0]))
-                    
-                    st.session_state['progression_images'] = progression_images
-                    st.success("✅ Progression generated dengan Latent Traversal!")
+                    scores = []
+                    for stage, img in progression_images:
+                        scores.append((stage, rough_severity_score(img)))
+
+                    reference_score = st.session_state.get('reference_severity')
+                    adjusted_labels = adjust_progression_labels(
+                        scores,
+                        start_stage,
+                        end_stage,
+                        reference_score=reference_score
+                    )
+
+                    progression_state = []
+                    for idx, (stage, img) in enumerate(progression_images):
+                        display_stage = adjusted_labels[idx] if adjusted_labels[idx] is not None else stage
+                        progression_state.append({
+                            "original_stage": stage,
+                            "display_stage": display_stage,
+                            "image": img,
+                            "score": scores[idx][1]
+                        })
+
+                    consistency_ok = check_progression_consistency(scores)
+                    labels_corrected = any(item['display_stage'] != item['original_stage'] for item in progression_state)
+
+                    st.session_state['progression_state'] = progression_state
+                    st.session_state['progression_consistent'] = consistency_ok
+                    st.session_state['progression_labels_corrected'] = labels_corrected
+                    st.session_state['progression_scores'] = scores
+                    st.session_state['progression_range'] = (start_stage, end_stage)
+
+                    if not consistency_ok or labels_corrected:
+                        st.info("✅ Progression generated dengan auto label check (sanity-corrected).")
+                    else:
+                        st.success("✅ Progression generated dengan Latent Traversal!")
     
     # Display progression results
-    if 'progression_images' in st.session_state:
-        progression_images = st.session_state['progression_images']
-        
-        # Display progression
-        cols = st.columns(len(progression_images))
-        for idx, (stage, img) in enumerate(progression_images):
-            cols[idx].image(img, caption=f"Stage {stage}\n{STAGE_NAMES[stage]}", 
-                           width='stretch')
+    if 'progression_state' in st.session_state:
+        progression_state = st.session_state['progression_state']
+        consistency_ok = st.session_state.get('progression_consistent', True)
+        labels_corrected = st.session_state.get('progression_labels_corrected', False)
+        scores = st.session_state.get('progression_scores', [])
+        ref_score = st.session_state.get('reference_severity')
+        ref_error = st.session_state.get('reference_severity_error')
+        start_saved, end_saved = st.session_state.get('progression_range', (start_stage, end_stage))
+
+        if ref_error:
+            st.warning(f"⚠️ Reference check skipped: {ref_error}")
+        elif ref_score is not None:
+            st.caption(f"👀 Reference severity (real-dementia-mri.png): {ref_score:.4f}")
+
+        if not consistency_ok or labels_corrected:
+            st.warning("Label auto-adjusted berdasarkan severity order + reference sanity check.")
+        else:
+            st.success("Progression severity sudah konsisten (lebih gelap = lebih severe).")
+
+        if scores:
+            score_lines = []
+            for item in progression_state:
+                relabel_note = ""
+                if item['display_stage'] != item['original_stage']:
+                    relabel_note = f" • relabeled from Stage {item['original_stage']}"
+                score_lines.append(
+                    f"Stage {item['display_stage']} ({safe_stage_name(item['display_stage'])}) → {item['score']:.4f}{relabel_note}"
+                )
+            st.caption("\n".join(score_lines))
+
+        cols = st.columns(len(progression_state))
+        for idx, item in enumerate(progression_state):
+            stage_label = safe_stage_name(item['display_stage'])
+            caption = f"Stage {item['display_stage']}\n{stage_label}"
+            if item['display_stage'] != item['original_stage']:
+                caption += f"\n(auto from Stage {item['original_stage']})"
+            cols[idx].image(item['image'], caption=caption, width='stretch')
         
         # Create combined image for download
-        fig, axes = plt.subplots(1, len(progression_images), figsize=(len(progression_images) * 3, 3))
-        if len(progression_images) == 1:
+        fig, axes = plt.subplots(1, len(progression_state), figsize=(len(progression_state) * 3, 3))
+        if len(progression_state) == 1:
             axes = [axes]
         
-        for idx, (stage, img) in enumerate(progression_images):
-            axes[idx].imshow(img, cmap='gray')
+        for idx, item in enumerate(progression_state):
+            stage_to_show = item['display_stage']
+            axes[idx].imshow(item['image'], cmap='gray')
             axes[idx].axis('off')
-            axes[idx].set_title(f"Stage {stage}\n{STAGE_NAMES[stage]}", fontsize=10, fontweight='bold')
+            axes[idx].set_title(
+                f"Stage {stage_to_show}\n{safe_stage_name(stage_to_show)}",
+                fontsize=10,
+                fontweight='bold'
+            )
         
         fig.suptitle("Dementia Progression", fontsize=14, fontweight='bold')
         plt.tight_layout()
         
-        # Save to buffer for download
         buf = io.BytesIO()
         fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
         buf.seek(0)
@@ -343,7 +473,7 @@ def main():
         st.download_button(
             label="📥 Download Progression Image",
             data=buf,
-            file_name=f"dementia_progression_stage_{start_stage}_to_{end_stage}.png",
+            file_name=f"dementia_progression_stage_{start_saved}_to_{end_saved}.png",
             mime="image/png",
             width="stretch"
         )
@@ -361,7 +491,7 @@ def main():
         selected_stage = st.selectbox(
             "Pilih Tahap Demensia:",
             options=list(STAGE_NAMES.keys()),
-            format_func=lambda x: f"Stage {x}: {STAGE_NAMES[x]}",
+            format_func=lambda x: f"Stage {x}: {safe_stage_name(x)}",
             help="Pilih tahap demensia untuk menghasilkan gambar MRI sintetis"
         )
         
@@ -392,7 +522,7 @@ def main():
             st.info(f"1️⃣ Generate **{num_images}** images dengan latent acak\n\n2️⃣ Tidak ada seleksi/diversity filter\n\n3️⃣ Download langsung (no storage)")
         
         st.write(f"Akan generate **{num_images} gambar** (random sampling)")
-        st.caption(f"🎯 Stage: {STAGE_NAMES[selected_stage]}")
+        st.caption(f"🎯 Stage: {safe_stage_name(selected_stage)}")
         
         # Generate button
         if st.button("🚀 Generate Images", type="primary", width="stretch"):
@@ -409,7 +539,7 @@ def main():
                 st.session_state['generated_images'] = generated_images
                 st.session_state['saved_paths'] = saved_paths
                 st.session_state['current_stage'] = selected_stage
-                st.session_state['current_stage_name'] = STAGE_NAMES[selected_stage]
+                st.session_state['current_stage_name'] = safe_stage_name(selected_stage)
                 
                 st.success(f"✅ Berhasil generate {num_images} gambar (fully random)!")
     
